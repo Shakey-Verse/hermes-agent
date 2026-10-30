@@ -1,5 +1,7 @@
 """macOS TCC-safe behavior for broad file searches."""
 
+import posixpath
+import shlex
 from pathlib import Path
 
 import pytest
@@ -92,10 +94,10 @@ def test_grep_pruned_search_still_finds_nested_protected_names(tmp_path, monkeyp
 
 
 @pytest.mark.platforms("macos")
-@pytest.mark.parametrize("top", ["rg: Work"])
+@pytest.mark.parametrize("top", [" Work", "rg: Work"])
 def test_grep_pruned_anchored_relative_home_parent_still_prunes_protected(tmp_path, monkeypatch, top):
-    """A relative root that gets ``./``-anchored (named like engine stderr) and
-    contains $HOME: find prints paths under ``./<root>``, so the
+    """A relative root that gets ``./``-anchored (led by whitespace, or named like
+    engine stderr) and contains $HOME: find prints paths under ``./<root>``, so the
     protected ``-path`` predicates must use that spelling too or find walks Downloads."""
     work = tmp_path / "work"
     home = work / top / "alice"
@@ -190,7 +192,7 @@ def test_rg_scoped_multi_root_terminates_options_before_dash_prefixed_root(monke
         if command.startswith("command -v rg"):
             return {"output": "/usr/bin/rg\n", "returncode": 0}
         if "--files" in command:
-            return {"output": "", "returncode": 0}
+            return {"output": "./--version/notes.txt\n", "returncode": 0}
         raise AssertionError(command)
 
     env.execute = execute
@@ -198,8 +200,14 @@ def test_rg_scoped_multi_root_terminates_options_before_dash_prefixed_root(monke
 
     command = _rg_files_commands(env.commands)[0]
     assert "cd '/Users/alice' &&" in command
-    assert " -- '.' '--version'" in command
+    # The safety property, not one spelling: options end at ``--`` and no root word
+    # can be read as an option (a dash-led root must also be ``./``-anchored).
+    words = shlex.split(command.split(" && ", 1)[1].split(" | ", 1)[0])
+    roots = words[words.index("--") + 1:]
+    assert not any(root.startswith("-") for root in roots), roots
+    assert [posixpath.normpath(root) for root in roots] == [".", "--version"]
     assert result.error is None
+    assert result.files == ["/Users/alice/--version/notes.txt"]
 
 
 @pytest.mark.platforms("macos")
